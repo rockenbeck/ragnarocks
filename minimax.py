@@ -16,45 +16,66 @@ class AbstractGameState(ABC):
 		pass
 
 	@abstractmethod
-	def Score(self) -> float:
+	def ScoreEstimate(self) -> float:
 		"""Return an estimate for "how good" this state is for the current player"""
 		# BB assuming that scores alternate pos/neg as in 2-player game
 		#  How to generalize to N-player games?
 		pass
 
 	@abstractmethod
-	def ScoreNoMoves(self) -> float:
+	def ScoreEstimateNoMoves(self) -> float:
 		"""Return score given that there are no possible moves"""
 		pass
 
 cScore = 0
-def Minimax(gs:AbstractGameState, lookahead:int = 4):
-	"""Returns the best move and estimated score for the game state after lookahead moves"""
-	# """Returns the best move (min or max depending on flag), and the estimated score for that move after lookahead moves"""
-	# BB Need to pass best score possible other ways for better pruning
-	#  How does the fancy pruning thing work again?
+
+def MinimaxRecursive(gs:AbstractGameState, fMax:bool, lookahead:int, alpha:float, beta:float):
+	"""Minimax with alpha-beta cutoff"""
 
 	global cScore
 
-	scoreBest = None
+	if lookahead == 0:
+		cScore += 1
+		return None, gs.ScoreEstimate()
+
 	moveBest = None
-	for move in gs.Moves():
-		gsNext = gs.DoMove(move)
+	
+	if fMax: # maximizing
+		scoreBest = -sys.float_info.max
+		for move in gs.Moves():
+			gsNext = gs.DoMove(move)
 
-		if lookahead > 0:
-			moveNext,scoreNext = Minimax(gsNext, lookahead - 1)
-			score = -scoreNext
-		else:
-			cScore += 1
-			score = -gsNext.Score()
+			moveNext,score = MinimaxRecursive(gsNext, False, lookahead - 1, alpha, beta)
 
-		if moveBest == None or score > scoreBest:
-			scoreBest = score
-			moveBest = move
-			if scoreBest == sys.float_info.max:
+			if score > scoreBest:
+				scoreBest = score
+				moveBest = move
+
+			alpha = max(alpha, score)
+			if alpha >= beta:
+				break
+	else: # minimizing
+		scoreBest = sys.float_info.max
+		for move in gs.Moves():
+			gsNext = gs.DoMove(move)
+
+			moveNext,score = MinimaxRecursive(gsNext, True, lookahead - 1, alpha, beta)
+
+			if score < scoreBest:
+				scoreBest = score
+				moveBest = move
+
+			beta = min(beta, score)
+			if alpha >= beta:
 				break
 	
 	if moveBest == None: # no possible moves -- score is for current game state
-		scoreBest = gs.ScoreNoMoves()
+		scoreBest = gs.ScoreEstimateNoMoves()
 
 	return moveBest,scoreBest
+
+
+def Minimax(gs:AbstractGameState, fMax:bool, lookahead:int = 4):
+	"""Returns the best move and estimated score for the game state after lookahead moves"""
+
+	return MinimaxRecursive(gs, fMax, lookahead, -sys.float_info.max, sys.float_info.max)

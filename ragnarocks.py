@@ -88,7 +88,8 @@ blStandard = BoardLayout(
 				[(0,5), (0,6), (0,7), (0,8), (0,9), (0,10), (0,11), (0,11), (1,10), (2,9)],
 				[[(5,9), (6,9), (7,9)], [(1,0), (2,0), (3,0)]])
 
-blThreeOnASide = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(4,4)], [(0,0)]])
+blThreeOnASide1v1 = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(2,4)], [(0,0)]])
+blThreeOnASide2v2 = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(2,4), (4,4)], [(0,0),(2,0)]])
 blTwoOnASide = BoardLayout([(0,2), (0,3), (1,2)], [[(2,2)], [(0,0)]])
 blTwoByThree = BoardLayout([(0,3), (0,4), (1,3)], [[(3,2)], [(0,0)]])
 
@@ -153,7 +154,6 @@ class GameState(AbstractGameState):
 			# BB better as single array?
 			self.mpHexVik: Dict[Hex, Viking] = {}
 			self.mpHexType: Dict[Hex, RegionType] = {}
-			self.mpSideScore = [0,0]
 
 			for side in Side:
 				for x,y in board.boardlayout.startingPositions[side]:
@@ -174,7 +174,10 @@ class GameState(AbstractGameState):
 			self.board = gsPrev.board
 			self.mpHexVik = copy.copy(gsPrev.mpHexVik)
 			self.mpHexType = copy.copy(gsPrev.mpHexType)
-			self.mpSideScore = copy.copy(gsPrev.mpSideScore)
+			self.regions = []
+			for type,s,mpSideC in gsPrev.regions:
+				if type != RegionType.Contested:
+					self.regions.append((type,s,mpSideC))
 
 			# Move viking
 			assert(self.mpHexVik[move.hexFrom] == move.vik)
@@ -227,11 +230,6 @@ class GameState(AbstractGameState):
 			s = mpHexRootSet[hexRoot]
 			s.add(hex)
 
-		regionsNew = []
-		for type,s,mpSideC in self.regions:
-			if type != RegionType.Contested:
-				regionsNew.append((type,s,mpSideC))
-
 		for s in mpHexRootSet.values():
 			mpSideC = [0,0]
 
@@ -257,9 +255,7 @@ class GameState(AbstractGameState):
 				for hex in s:
 					self.mpHexType[hex] = typeNew
 
-			regionsNew.append((typeNew, s, mpSideC))
-
-		self.regions = regionsNew
+			self.regions.append((typeNew, s, mpSideC))
 
 		self.mpTypeCHex = [0,0,0,0,0]
 		
@@ -295,21 +291,24 @@ class GameState(AbstractGameState):
 		for hexFrom,vik in self.mpHexVik.items():
 			if vik.side != self.sideToPlay:
 				continue
+			if self.mpHexType[hexFrom] != RegionType.Contested:
+				continue
 			
 			for hexTo in self.HexesVisibleFrom(hexFrom):
 				for hexStone in self.HexesVisibleFrom(hexTo, vikIgnore=vik):
 					yield Move(vik, hexFrom, hexTo, hexStone)
 
-	def Score(self:GameState, gameOver:bool=False) -> float:
-		# BB rename--not actual game final score
+	def ScoreEstimate(self:GameState, gameOver:bool=False) -> float:
+		"""Return a heuristic value of this board position with higher scores being better for Red"""
+
 		# BB more efficient to calculate score in AssignRegions and not keep stuff around?
 
 		mpTypeCHex = [0,0,0,0,0]
 		for type, s, mpSideC in self.regions:
 			mpTypeCHex[type] += len(s)
 
-		cHexMine = mpTypeCHex[RegionType.SettledRed if self.sideToPlay == Side.Red else RegionType.SettledWhite]
-		cHexTheirs = mpTypeCHex[RegionType.SettledWhite if self.sideToPlay == Side.Red else RegionType.SettledRed]
+		cHexRed = mpTypeCHex[RegionType.SettledRed]
+		cHexWhite = mpTypeCHex[RegionType.SettledWhite]
 
 		if gameOver or mpTypeCHex[RegionType.Contested] == 0:
 			# game is over
@@ -323,12 +322,12 @@ class GameState(AbstractGameState):
 			# else:
 			# 	return 0 # tie
 
-			return (cHexMine - cHexTheirs) * 100000
+			return (cHexRed - cHexWhite) * 100000
 
-		cHexMaybe = 0 # + for mine, - for theirs
+		cHexMaybe = 0 # + for Red, - for White
 		for type, s, mpSideC in self.regions:
 			if type == RegionType.Contested:
-				# frac = mpSideC[self.sideToPlay] / sum(mpSideC)
+				# frac = mpSideC[Side.Red] / sum(mpSideC)
 
 				mpSideCHexVis = [0,0]
 				for hex in s:
@@ -337,15 +336,14 @@ class GameState(AbstractGameState):
 						mpSideCHexVis[vik.side] += sum(1 for _ in self.HexesVisibleFrom(hex))
 
 				if sum(mpSideCHexVis) > 0: # else neither has any moves?
-					frac = mpSideCHexVis[self.sideToPlay] / sum(mpSideCHexVis)
+					frac = mpSideCHexVis[Side.Red] / sum(mpSideCHexVis)
 					cHex = len(s)
 					cHexMaybe += Lerp(-cHex, cHex, frac)
 
+		return cHexRed - cHexWhite + cHexMaybe
 
-		return cHexMine - cHexTheirs + cHexMaybe
-
-	def ScoreNoMoves(self:GameState) -> float:
-		return self.Score(gameOver=True)
+	def ScoreEstimateNoMoves(self:GameState) -> float:
+		return self.ScoreEstimate(gameOver=True)
 
 	def MpSideScore(self:GameState) -> List[int]:
 		mpSideScore = [0,0]
@@ -620,7 +618,7 @@ class RagnarokWidget(Frame):
 		self.SetGameState(self.gsRedoStack.pop())
 
 	def ComputerMove(self, *args):
-		move,score = Minimax(self.gs, lookahead=3)
+		move,score = Minimax(self.gs, self.gs.sideToPlay == Side.Red, lookahead=2)
 		if move == None:
 			self.bell() # no possible moves?
 		else:
@@ -638,9 +636,9 @@ mainframe = ttk.Frame(root)
 mainframe.grid(column=0, row=0, sticky=(N, W, E, S))
 
 # board = Board(blStandard)
-# board = Board(blThreeOnASide)
+board = Board(blThreeOnASide2v2)
+# board = Board(blTwoByThree)
 # board = Board(blTwoOnASide)
-board = Board(blTwoByThree)
 
 RagnarokWidget = RagnarokWidget(mainframe, GameState(board), 650, 550)
 RagnarokWidget.grid(column=0, row=0, sticky=(N, W, E, S))
