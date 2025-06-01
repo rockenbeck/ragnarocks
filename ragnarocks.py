@@ -84,51 +84,61 @@ class BoardLayout():
 		self.rowdefs:List[Tuple[int]] = rowdefs # for each Y, starting X, number of hexes in row
 		self.startingPositions:List[List[Tuple[int]]] = startingPositions # for each side, list of starting viking coords
 
-blStandard = BoardLayout(
-				[(0,5), (0,6), (0,7), (0,8), (0,9), (0,10), (0,11), (0,11), (1,10), (2,9)],
-				[[(5,9), (6,9), (7,9)], [(1,0), (2,0), (3,0)]])
-
-blThreeOnASide1v1 = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(2,4)], [(0,0)]])
-blThreeOnASide2v2 = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(2,4), (4,4)], [(0,0),(2,0)]])
-blTwoOnASide = BoardLayout([(0,2), (0,3), (1,2)], [[(2,2)], [(0,0)]])
-blTwoByThree = BoardLayout([(0,3), (0,4), (1,3)], [[(3,2)], [(0,0)]])
-
 
 class Board:
-	def __init__(self:Board, boardlayout:BoardLayout=blStandard):
-		self.setHex:Set[Hex] = set()
+	def __init__(self:Board, boardlayout:BoardLayout):
 
 		self.boardlayout = boardlayout
 
+		self.mpHexI:Dict[Hex,int] = {}
+		self.hexes:List[Hex] = []
+
 		for y,(xMic,c) in enumerate(boardlayout.rowdefs):
 			for x in range(xMic, xMic + c):
-				self.setHex.add(Hex(x,y))
+				hex = Hex(x,y)
+				self.mpHexI[hex] = len(self.hexes)
+				self.hexes.append(hex)
 
-	def __iter__(self):
-		return self.setHex.__iter__()
+		self.mpIHexIDirNeighbor:List[List[int]] = []
+		self.mpIHexNeighbors:List[List[int]] = []
+		for hex in self.hexes:
+			mpIDirN = []
+			ns = []
+			for dir in Dir:
+				dX,dY = Hex.s_mpDirDxDy[dir]
+				hexOther = Hex(hex.x + dX, hex.y + dY)
+				if hexOther in self.mpHexI:
+					iHexOther = self.mpHexI[hexOther]
+					ns.append(iHexOther)
+					mpIDirN.append(iHexOther)
+				else:
+					mpIDirN.append(None)
 
-	def Neighbor(self, hex, dir):
-		dX,dY = Hex.s_mpDirDxDy[dir]
-		hexOther = Hex(hex.x + dX, hex.y + dY)
-		return hexOther if hexOther in self.setHex else None
+			self.mpIHexNeighbors.append(ns)
+			self.mpIHexIDirNeighbor.append(mpIDirN)
 
-	def Neighbors(self, hex):
-		# BB cache this?
+	def Hexes(self) -> List[Hex]:
+		return self.hexes
 
-		hexes = []
-		for dir in Dir:
-			hexOther = self.Neighbor(hex, dir)
-			if hexOther !=  None:
-				hexes.append(hexOther)
-		return hexes
+	def Hex(self, iHex:int) -> Hex:
+		return self.hexes[iHex]
+	
+	def IHex(self, hex:Hex) -> int:
+		return self.mpHexI[hex]
+
+	def Neighbor(self, iHex:int, dir:Dir):
+		return self.mpIHexIDirNeighbor[iHex][dir]
+
+	def Neighbors(self, iHex:int):
+		return self.mpIHexNeighbors[iHex]
 
 
 class Move:
-	def __init__(self, vik, hexFrom, hexTo, hexStone):
+	def __init__(self, vik, iHexFrom, iHexTo, iHexStone):
 		self.vik = vik
-		self.hexFrom = hexFrom
-		self.hexTo = hexTo
-		self.hexStone = hexStone
+		self.iHexFrom = iHexFrom
+		self.iHexTo = iHexTo
+		self.iHexStone = iHexStone
 
 
 class RegionType(IntEnum):
@@ -138,33 +148,40 @@ class RegionType(IntEnum):
 	SettledWhite = 3
 	Stone = 4
 
+class Region():
+	def __init__(self):
+		self.type = RegionType.Contested
+		self.aiHex = []
+		self.mpSideCVik = [0,0]
+
 
 class GameState(AbstractGameState):
 
 	def __init__(self:GameState, board:Board = None, gsPrev:GameState = None, move:Move = None):
 
-		self.regions: List[Tuple[RegionType, Set[Hex], List[int]]] = []
+		self.regions: List[Region] = []
 	
 		if board != None:
+			# Set up initial board state
+
 			assert(gsPrev == None)
 			assert(move == None)
 
 			self.board = board
 
-			# BB better as single array?
-			self.mpHexVik: Dict[Hex, Viking] = {}
-			self.mpHexType: Dict[Hex, RegionType] = {}
+			self.mpIHexVik: Dict[int, Viking] = {}
 
 			for side in Side:
 				for x,y in board.boardlayout.startingPositions[side]:
-					self.mpHexVik[Hex(x,y)] = Viking(side)
+					self.mpIHexVik[board.IHex(Hex(x,y))] = Viking(side)
 
-			for hex in board:
-				self.mpHexType[hex] = RegionType.Contested
+			self.mpIHexType: List[int, RegionType] = [RegionType.Contested] * len(board.Hexes())
 
-			self.sideToPlay:Side = Side.Red # Who to start?
+			self.sideToPlay:Side = Side.Red # Make this a parameter? Or like chess, red always starts
 
 		elif gsPrev:
+			# Set up from previous board state + move
+
 			assert(move != None)
 
 			assert(move.vik.side == gsPrev.sideToPlay)
@@ -172,20 +189,19 @@ class GameState(AbstractGameState):
 			# Copy state
 			# BB better to alter, then undo?
 			self.board = gsPrev.board
-			self.mpHexVik = copy.copy(gsPrev.mpHexVik)
-			self.mpHexType = copy.copy(gsPrev.mpHexType)
-			self.regions = []
-			for type,s,mpSideC in gsPrev.regions:
-				if type != RegionType.Contested:
-					self.regions.append((type,s,mpSideC))
+			self.mpIHexVik = copy.copy(gsPrev.mpIHexVik)
+			self.mpIHexType = copy.copy(gsPrev.mpIHexType)
+
+			# Keep uncontested regions from prev; AssignRegions only updates contested ones
+			self.regions = list(filter(lambda region: region.type != RegionType.Contested, gsPrev.regions))
 
 			# Move viking
-			assert(self.mpHexVik[move.hexFrom] == move.vik)
-			del(self.mpHexVik[move.hexFrom])
-			self.mpHexVik[move.hexTo] = move.vik
+			assert(self.mpIHexVik[move.iHexFrom] == move.vik)
+			del(self.mpIHexVik[move.iHexFrom])
+			self.mpIHexVik[move.iHexTo] = move.vik
 
 			# Place stone
-			self.mpHexType[move.hexStone] = RegionType.Stone
+			self.mpIHexType[move.iHexStone] = RegionType.Stone
 
 			# Alternate sides
 			self.sideToPlay = gsPrev.sideToPlay.Opposite()
@@ -194,73 +210,71 @@ class GameState(AbstractGameState):
 		self.AssignRegions()
 	
 	@staticmethod
-	def HexRoot(mpHexHexParent:DefaultDict[Hex, Hex], hex:Hex) -> Hex:
-		hexParent = mpHexHexParent[hex]
-		if hexParent != hex:
-			hexParent = GameState.HexRoot(mpHexHexParent, hexParent)
-			mpHexHexParent[hex] = hexParent
-		return hexParent
+	def IHexRoot(mpIHexIHexParent:DefaultDict[int, int], iHex:int) -> int:
+		iHexParent = mpIHexIHexParent[iHex]
+		if iHexParent != iHex:
+			iHexParent = GameState.IHexRoot(mpIHexIHexParent, iHexParent)
+			mpIHexIHexParent[iHex] = iHexParent
+		return iHexParent
 
 	def AssignRegions(self:GameState):
-		"""Update mpHexType and regions based on connected regions"""
+		"""Update mpIHexType and regions based on connected regions"""
 
 		# Build connectivity graph
 
-		mpHexHexParent:DefaultDict[Hex, Hex] = KeyDependentDefaultDict(lambda hex : hex)
-		for hex in self.board:
-			if self.mpHexType[hex] != RegionType.Contested:
+		mpIHexIHexParent:DefaultDict[int, int] = KeyDependentDefaultDict(lambda iHex : iHex)
+		for iHex in range(len(self.board.Hexes())):
+			if self.mpIHexType[iHex] != RegionType.Contested:
 				continue
 
-			hexRoot = self.HexRoot(mpHexHexParent, hex)
+			iHexRoot = GameState.IHexRoot(mpIHexIHexParent, iHex)
 		
-			for hexOther in self.board.Neighbors(hex):
-				if self.mpHexType[hexOther] != RegionType.Contested:
-					assert(self.mpHexType[hexOther] == RegionType.Stone)
+			for iHexOther in self.board.Neighbors(iHex):
+				if self.mpIHexType[iHexOther] != RegionType.Contested:
+					assert(self.mpIHexType[iHexOther] == RegionType.Stone)
 					continue
-				hexRootOther = GameState.HexRoot(mpHexHexParent, hexOther)
-				mpHexHexParent[hexRootOther] = hexRoot
+				iHexRootOther = GameState.IHexRoot(mpIHexIHexParent, iHexOther)
+				mpIHexIHexParent[iHexRootOther] = iHexRoot
 
-		mpHexRootSet:DefaultDict[Hex,Set[Hex]] = defaultdict(set)
+		mpIHexRootRegion:DefaultDict[int,Region] = defaultdict(lambda : Region())
 
-		for hex in self.board: # BB could I use mpHexHexParent?
-			if self.mpHexType[hex] != RegionType.Contested:
+		for iHex,type in enumerate(self.mpIHexType):
+			if type != RegionType.Contested:
 				continue
-			hexRoot = GameState.HexRoot(mpHexHexParent, hex)
+			iHexRoot = GameState.IHexRoot(mpIHexIHexParent, iHex)
 
-			s = mpHexRootSet[hexRoot]
-			s.add(hex)
+			region = mpIHexRootRegion[iHexRoot]
+			region.aiHex.append(iHex)
+			
+			if iHex in self.mpIHexVik:
+				vik = self.mpIHexVik[iHex]
+				region.mpSideCVik[vik.side] += 1
 
-		for s in mpHexRootSet.values():
-			mpSideC = [0,0]
-
-			for hex in s:
-				if hex in self.mpHexVik:
-					vik = self.mpHexVik[hex]
-					mpSideC[vik.side] += 1
+		for region in mpIHexRootRegion.values():
 
 			typeNew = None
 
-			if mpSideC[Side.Red] == 0:
-				if mpSideC[Side.White] == 0:
-					typeNew = RegionType.Wild
+			if region.mpSideCVik[Side.Red] == 0:
+				if region.mpSideCVik[Side.White] == 0:
+					region.type = RegionType.Wild
 				else:
-					typeNew = RegionType.SettledWhite
+					region.type = RegionType.SettledWhite
 			else:
-				if mpSideC[Side.White] == 0:
-					typeNew = RegionType.SettledRed
+				if region.mpSideCVik[Side.White] == 0:
+					region.type = RegionType.SettledRed
 				else:
-					typeNew = RegionType.Contested
+					assert(region.type == RegionType.Contested)
 			
-			if typeNew != RegionType.Contested:
-				for hex in s:
-					self.mpHexType[hex] = typeNew
+			if region.type != RegionType.Contested:
+				for iHex in region.aiHex:
+					self.mpIHexType[iHex] = region.type
 
-			self.regions.append((typeNew, s, mpSideC))
+			self.regions.append(region)
 
 		self.mpTypeCHex = [0,0,0,0,0]
 		
-		for type, s, mpSideC in self.regions:
-			self.mpTypeCHex[type] += len(s)
+		for region in self.regions:
+			self.mpTypeCHex[region.type] += len(region.aiHex)
 
 		if self.mpTypeCHex[RegionType.Contested] == 0:
 			self.sideToPlay = None # done
@@ -270,33 +284,37 @@ class GameState(AbstractGameState):
 
 		return GameState(gsPrev=self, move=move)
 	
-	def HexesVisibleFrom(self:GameState, hex:Hex, vikIgnore:Viking=None) -> Iterator[Hex]:
+	def HexesVisibleFrom(self:GameState, iHex:int, vikIgnore:Viking=None) -> Iterator[Hex]:
 		"""Yields all hexes visible from the given hex"""
 
 		for dir in Dir:
-			hexNew = self.board.Neighbor(hex, dir)
-			while hexNew != None: # off edge
-				if self.mpHexType[hexNew] == RegionType.Stone:
+			iHexNew = self.board.Neighbor(iHex, dir)
+			while iHexNew != None: # off edge
+				if self.mpIHexType[iHexNew] == RegionType.Stone:
 					break
-				if hexNew in self.mpHexVik:
-					vik = self.mpHexVik[hexNew]
+				if iHexNew in self.mpIHexVik:
+					vik = self.mpIHexVik[iHexNew]
 					if vik != vikIgnore:
 						break
-				yield hexNew
-				hexNew = self.board.Neighbor(hexNew, dir)
+				yield iHexNew
+				iHexNew = self.board.Neighbor(iHexNew, dir)
 
 	def Moves(self:GameState) -> Iterator[Move]:
 		"""Yields all legal moves from current state"""
 
-		for hexFrom,vik in self.mpHexVik.items():
+		# BB alpha-beta minimax works faster if better moves are yielded first
+		#  My instinct is that moving further is usually better -- sort
+
+		for iHexFrom,vik in self.mpIHexVik.items():
+			# BB consider other structures for keeping track of vikings
 			if vik.side != self.sideToPlay:
 				continue
-			if self.mpHexType[hexFrom] != RegionType.Contested:
+			if self.mpIHexType[iHexFrom] != RegionType.Contested:
 				continue
 			
-			for hexTo in self.HexesVisibleFrom(hexFrom):
-				for hexStone in self.HexesVisibleFrom(hexTo, vikIgnore=vik):
-					yield Move(vik, hexFrom, hexTo, hexStone)
+			for iHexTo in self.HexesVisibleFrom(iHexFrom):
+				for iHexStone in self.HexesVisibleFrom(iHexTo, vikIgnore=vik):
+					yield Move(vik, iHexFrom, iHexTo, iHexStone)
 
 	def ScoreEstimate(self:GameState, gameOver:bool=False) -> float:
 		"""Return a heuristic value of this board position with higher scores being better for Red"""
@@ -304,8 +322,8 @@ class GameState(AbstractGameState):
 		# BB more efficient to calculate score in AssignRegions and not keep stuff around?
 
 		mpTypeCHex = [0,0,0,0,0]
-		for type, s, mpSideC in self.regions:
-			mpTypeCHex[type] += len(s)
+		for region in self.regions:
+			mpTypeCHex[region.type] += len(region.aiHex)
 
 		cHexRed = mpTypeCHex[RegionType.SettledRed]
 		cHexWhite = mpTypeCHex[RegionType.SettledWhite]
@@ -325,19 +343,22 @@ class GameState(AbstractGameState):
 			return (cHexRed - cHexWhite) * 100000
 
 		cHexMaybe = 0 # + for Red, - for White
-		for type, s, mpSideC in self.regions:
-			if type == RegionType.Contested:
-				# frac = mpSideC[Side.Red] / sum(mpSideC)
+		for region in self.regions:
+			if region.type == RegionType.Contested:
+				# frac = region.mpSideCVik[Side.Red] / sum(region.mpSideCVik)
 
+				# check total number of open positions each side can move to
 				mpSideCHexVis = [0,0]
-				for hex in s:
-					if hex in self.mpHexVik: # BB faster way to compute this?
-						vik = self.mpHexVik[hex]
-						mpSideCHexVis[vik.side] += sum(1 for _ in self.HexesVisibleFrom(hex))
+				for iHex,vik in self.mpIHexVik.items():
+					# Any faster to have bespoke function?
+					mpSideCHexVis[vik.side] += sum(1 for _ in self.HexesVisibleFrom(iHex))
 
 				if sum(mpSideCHexVis) > 0: # else neither has any moves?
+					# Assign contested hexes based on fraction of open moves
+					# Should maybe make cHex smaller because each following
+					#  move will reduce total possible area by one
 					frac = mpSideCHexVis[Side.Red] / sum(mpSideCHexVis)
-					cHex = len(s)
+					cHex = len(region.aiHex) - 1
 					cHexMaybe += Lerp(-cHex, cHex, frac)
 
 		return cHexRed - cHexWhite + cHexMaybe
@@ -347,11 +368,11 @@ class GameState(AbstractGameState):
 
 	def MpSideScore(self:GameState) -> List[int]:
 		mpSideScore = [0,0]
-		for type, s, mpSideC in self.regions:
-			if type == RegionType.SettledRed:
-				mpSideScore[Side.Red] += len(s)
-			elif type == RegionType.SettledWhite:
-				mpSideScore[Side.White] += len(s)
+		for region in self.regions:
+			if region.type == RegionType.SettledRed:
+				mpSideScore[Side.Red] += len(region.aiHex)
+			elif region.type == RegionType.SettledWhite:
+				mpSideScore[Side.White] += len(region.aiHex)
 		return mpSideScore
 
 
@@ -386,12 +407,14 @@ class RagnarokWidget(Frame):
 		self.mpVikIdOval = {}
 
 		self.move:Move = Move(None, None, None, None)
-		self.hexesVis = []
+		self.hexesVis:List[int] = []
 
 		self.fontSize = 30
 		self.fontValue = tkFont.Font(family='Helvetica', size=self.fontSize, weight='bold')
 
-		self.BuildHexes()
+		self.mpIHexIdPoly:List[int] = []
+		for iHex in range(len(self.gs.board.Hexes())):
+			self.mpIHexIdPoly.append(self.CreateHex(iHex))
 
 		self.gsUndoStack:List[GameState] = []
 		self.gsRedoStack:List[GameState] = []
@@ -409,19 +432,21 @@ class RagnarokWidget(Frame):
 
 		self.canvas.focus_set()
 
-	def PosCenter(self, hex):
+	def PosCenter(self:RagnarokWidget, iHex:int):
+		hex = self.gs.board.Hex(iHex)
 		x = self.xOrigin + (hex.x + 0.5) * self.dXPerX + hex.y * self.dXPerY
 		y = self.yOrigin + hex.y * self.dYPerY - self.dXSide / 2
 		return (x,y)
 	
-	def RectViking(self:RagnarokWidget, hex:Hex):
-		x,y = self.PosCenter(hex)
+	def RectViking(self:RagnarokWidget, iHex:int):
+		x,y = self.PosCenter(iHex)
 		return (x - self.dXVikingDot / 2, 
 		  		y - self.dXVikingDot / 2,
 				x + self.dXVikingDot / 2,
 				y + self.dXVikingDot / 2)
 
-	def CreateHex(self:RagnarokWidget, hex:Hex, fill='#FFFFFF', tags=None) -> int:
+	def CreateHex(self:RagnarokWidget, iHex:int, fill='#FFFFFF', tags=None) -> int:
+			hex = self.gs.board.Hex(iHex)
 			x = self.xOrigin + hex.x * self.dXPerX + hex.y * self.dXPerY
 			y = self.yOrigin + hex.y * self.dYPerY
 			return self.canvas.create_polygon(
@@ -436,16 +461,11 @@ class RagnarokWidget(Frame):
 						fill=fill,
 						tags=tags)
 
-	def BuildHexes(self):
-		self.mpHexIdPoly = {}
-		for hex in self.gs.board:
-			self.mpHexIdPoly[hex] = self.CreateHex(hex)
-
-	def SetHexColor(self:RagnarokWidget, hex:Hex, color):
-		self.canvas.itemconfigure(self.mpHexIdPoly[hex], fill=color)
+	def SetHexColor(self:RagnarokWidget, iHex:int, color):
+		self.canvas.itemconfigure(self.mpIHexIdPoly[iHex], fill=color)
 					
-	def ResetHexColor(self:RagnarokWidget, hex:Hex):
-		type = self.gs.mpHexType[hex]
+	def ResetHexColor(self:RagnarokWidget, iHex:int):
+		type = self.gs.mpIHexType[iHex]
 		if type == RegionType.Contested:
 			color = '#C0F0C0'
 		elif type == RegionType.Wild:
@@ -459,20 +479,20 @@ class RagnarokWidget(Frame):
 		else:
 			assert(False)
 
-		self.SetHexColor(hex, color)
+		self.SetHexColor(iHex, color)
 
 	def SetGameState(self, gs:GameState):
 		assert(gs.board == self.gs.board)
 		self.gs = gs
 
-		for hex,id in self.mpHexIdPoly.items():
-			self.ResetHexColor(hex)
+		for iHex in range(len(self.mpIHexIdPoly)):
+			self.ResetHexColor(iHex)
 
 		self.canvas.delete("viking")
 
-		for hex,vik in gs.mpHexVik.items():
+		for iHex,vik in gs.mpIHexVik.items():
 			self.mpVikIdOval[vik] = self.canvas.create_oval(
-											self.RectViking(hex),
+											self.RectViking(iHex),
 											fill=RagnarokWidget.mpSideColor[vik.side],
 											tags="viking")
 			
@@ -494,8 +514,8 @@ class RagnarokWidget(Frame):
 		
 		self.SetGameState(gs)
 
-	def HexFromEvent(self:RagnarokWidget, event:Event):
-		for hex,id in self.mpHexIdPoly.items():
+	def IHexFromEvent(self:RagnarokWidget, event:Event):
+		for iHex,id in enumerate(self.mpIHexIdPoly):
 			xys = self.canvas.coords(id)
 			fInside = True
 			for iXy in range(0,len(xys),2):
@@ -506,7 +526,7 @@ class RagnarokWidget(Frame):
 					fInside = False
 					break
 			if fInside:
-				return hex
+				return iHex
 		return None
 	
 	def UpdateMove(self:RagnarokWidget, move:Move):
@@ -517,76 +537,76 @@ class RagnarokWidget(Frame):
 
 		if self.move.vik != None:
 			id = self.mpVikIdOval[self.move.vik]
-			self.canvas.coords(id, self.RectViking(self.move.hexFrom))
+			self.canvas.coords(id, self.RectViking(self.move.iHexFrom))
 			self.canvas.itemconfigure(id, outline='#000000', width=1)
-		for hex in self.hexesVis:
-			self.ResetHexColor(hex)
+		for iHex in self.hexesVis:
+			self.ResetHexColor(iHex)
 
 		self.move = move
 		if move.vik != None:
 			id = self.mpVikIdOval[move.vik]
 			self.canvas.itemconfigure(id, outline='#8080ff', width=4)
 		  
-			if move.hexTo != None:
-				self.canvas.coords(id, self.RectViking(move.hexTo))
-				self.hexesVis = set(self.gs.HexesVisibleFrom(move.hexTo, move.vik))
+			if move.iHexTo != None:
+				self.canvas.coords(id, self.RectViking(move.iHexTo))
+				self.hexesVis = list(self.gs.HexesVisibleFrom(move.iHexTo, move.vik))
 			else:
-				self.hexesVis = set(self.gs.HexesVisibleFrom(move.hexFrom, move.vik))
+				self.hexesVis = list(self.gs.HexesVisibleFrom(move.iHexFrom, move.vik))
 
-			for hex in self.hexesVis:
-				self.SetHexColor(hex, '#C0C0ff')
+			for iHex in self.hexesVis:
+				self.SetHexColor(iHex, '#C0C0ff')
 
 	def HandleMouseDown(self:RagnarokWidget, event:Event):
 		self.canvas.focus_set()
 
         # print(f"click at {(event.x, event.y)}")
 
-		hex = self.HexFromEvent(event)
-		if hex == None:
+		iHex = self.IHexFromEvent(event)
+		if iHex == None:
 			self.UpdateMove(None)
 			return
 		
-		if self.gs.mpHexType[hex] != RegionType.Contested:
+		if self.gs.mpIHexType[iHex] != RegionType.Contested:
 			return
 		
 		fCommand = True if (event.state & 0x8) else False
 		# fOption = True if (event.state & 010) else False
 
-		if self.move.vik and hex in self.hexesVis:
-			if self.move.hexTo != None:
+		if self.move.vik and iHex in self.hexesVis:
+			if self.move.iHexTo != None:
 				# do the move
-				move = Move(self.move.vik, self.move.hexFrom, self.move.hexTo, hex)
+				move = Move(self.move.vik, self.move.iHexFrom, self.move.iHexTo, iHex)
 				self.UpdateMove(None)
 				self.AppendGameState(self.gs.DoMove(move))
 			else:
-				self.UpdateMove(Move(self.move.vik, self.move.hexFrom, hex, None))
+				self.UpdateMove(Move(self.move.vik, self.move.iHexFrom, iHex, None))
 			return
 
-		if hex in self.gs.mpHexVik:
-			vik = self.gs.mpHexVik[hex]
+		if iHex in self.gs.mpIHexVik:
+			vik = self.gs.mpIHexVik[iHex]
 			if vik.side == self.gs.sideToPlay:
-				self.UpdateMove(Move(vik, hex, None, None))
+				self.UpdateMove(Move(vik, iHex, None, None))
 				return
 			self.bell() # clicked on wrong side's viking
 		
 		self.UpdateMove(None)
 
 	def HandleMouseMove(self, event):
-		hex = self.HexFromEvent(event)
-		if hex == None:
+		iHex = self.IHexFromEvent(event)
+		if iHex == None:
 			return
 		
 		self.canvas.delete("move")
-		if self.move.vik and hex in self.hexesVis:
-			if self.move.hexTo == None:
+		if self.move.vik and iHex in self.hexesVis:
+			if self.move.iHexTo == None:
 				# draw viking where we'll move to
 				self.canvas.create_oval(
-								self.RectViking(hex),
+								self.RectViking(iHex),
 								fill=RagnarokWidget.mpSideColor[self.move.vik.side],
 								tags="move")
 			else:
 				# draw where we'll place stone
-				self.CreateHex(hex, fill='#808080', tags="move")
+				self.CreateHex(iHex, fill='#808080', tags="move")
 			return
 
 		# draw number of hexes in region under?
@@ -602,6 +622,11 @@ class RagnarokWidget(Frame):
 		self.UpdateMove(None)
 
 	def Undo(self, *args):
+		# "undo" while move in progress undoes partial move
+		if self.move.vik:
+			self.CancelMove()
+			return
+
 		if len(self.gsUndoStack) == 0:
 			self.bell()
 			return
@@ -635,10 +660,31 @@ root.rowconfigure(0, weight=1)
 mainframe = ttk.Frame(root)
 mainframe.grid(column=0, row=0, sticky=(N, W, E, S))
 
-# board = Board(blStandard)
-board = Board(blThreeOnASide2v2)
-# board = Board(blTwoByThree)
-# board = Board(blTwoOnASide)
+bl_Standard = BoardLayout(
+				[(0,5), (0,6), (0,7), (0,8), (0,9), (0,10), (0,11), (0,11), (1,10), (2,9)],
+				[[(5,9), (6,9), (7,9)], [(1,0), (2,0), (3,0)]])
+
+bl_5x5_3v3 = BoardLayout([(0,4), (0,5), (0,6), (0,7), (0,8), (1,7), (2,6), (3,5), (4,4)], 
+						  [[(0,0),(7,4),(4,8)], [(3,0),(0,4),(7,8)]])
+
+# this one is nearly interesting, but starting move is devastating
+bl_4x4_2v2 = BoardLayout([(0,4), (0,5), (0,6), (0,7), (1,6), (2,5), (3,4)], [[(3,6), (6,6)], [(0,0),(3,0)]])
+# this version is much better
+bl_4x4_2v2 = BoardLayout([(0,4), (0,5), (0,6), (0,7), (1,6), (2,5), (3,4)], [[(3,6),(3,0)], [(0,0),(6,6)]])
+
+bl_3x4_2v2 = BoardLayout([(0,4), (0,5), (0,6), (1,5), (2,4)], [[(2,4), (5,4)], [(0,0),(3,0)]])
+bl_3x3_2v2 = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(2,4), (4,4)], [(0,0),(2,0)]])
+bl_3x3_1v1 = BoardLayout([(0,3), (0,4), (0,5), (1,4), (2,3)], [[(2,4)], [(0,0)]])
+bl_2x2_1v1 = BoardLayout([(0,2), (0,3), (1,2)], [[(2,2)], [(0,0)]])
+bl_2x3_1v1 = BoardLayout([(0,3), (0,4), (1,3)], [[(3,2)], [(0,0)]])
+
+board = Board(bl_Standard)
+# board = Board(bl_5x5_3v3)
+# board = Board(bl_4x4_2v2)
+# board = Board(bl_3x4_2v2)
+# board = Board(bl_3x3_2v2)
+# board = Board(bl_2x2_1v1)
+# board = Board(bl_2x3_1v1)
 
 RagnarokWidget = RagnarokWidget(mainframe, GameState(board), 650, 550)
 RagnarokWidget.grid(column=0, row=0, sticky=(N, W, E, S))
